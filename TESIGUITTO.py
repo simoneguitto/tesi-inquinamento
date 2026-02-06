@@ -10,8 +10,37 @@ st.set_page_config(page_title="Simulatore Tesi Guitto", layout="wide")
 st.title("Simulatore Diffusione Inquinanti - Analisi Orografica")
 st.write("Modello ADR (Advezione-Diffusione-Reazione) sviluppato per lo studio del ristagno urbano.")
 
-# --- BARRA LATERALE PER I INPUT ---
+# --- BARRA LATERALE PARAMETRI ---
 st.sidebar.header("Parametri Simulazione")
+
+# Scelta dell'inquinante per definire la soglia di rischio
+st.sidebar.subheader("🧪 Agente Chimico")
+tipo_gas = st.sidebar.selectbox(
+    "Sostanza analizzata",
+    ["Biossido di Azoto (NO2)", "Monossido di Carbonio (CO)", "Gas Industriale (Tossico)", "Custom"]
+)
+
+# Soglie realistiche per la tesi (in ppm)
+if tipo_gas == "Biossido di Azoto (NO2)":
+    soglia = 0.1  # Limite per salute pubblica
+    nota = "Inquinante urbano (scarichi auto)."
+elif tipo_gas == "Monossido di Carbonio (CO)":
+    soglia = 9.0  # Limite orario standard
+    nota = "Gas da combustione riscaldamento."
+elif tipo_gas == "Gas Industriale (Tossico)":
+    soglia = 0.05 # Molto sensibile (tipo Bhopal)
+    nota = "Sostanza ad alta tossicità acuta."
+else:
+    soglia = st.sidebar.slider("Soglia manuale", 0.01, 10.0, 1.0)
+    nota = "Valore inserito manualmente."
+
+st.sidebar.info(f"Soglia allerta: {soglia} ppm. {nota}")
+
+# Parametri fisici classici
+u = st.sidebar.slider("Velocità del vento (u)", 0.0, 5.0, 1.5)
+D = st.sidebar.slider("Coefficiente Diffusione (K)", 0.1, 2.0, 0.5)
+k_reac = st.sidebar.slider("Decadimento chimico", 0.0, 0.1, 0.01)
+
 
 # Dimensioni griglia (nx, ny sono i nodi di calcolo)
 L, W = 50, 50
