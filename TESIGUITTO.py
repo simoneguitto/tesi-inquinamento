@@ -1,207 +1,80 @@
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
-import pandas as pd
-import time
 
-# --- CONFIGURAZIONE PAGINA ---
-st.set_page_config(page_title="Simulatore ADR - Tesi", layout="wide")
+st.set_page_config(page_title="Simulatore Dispersione", layout="wide")
+st.title("Simulatore di Dispersione Inquinanti - Modello Stabile")
 
-st.markdown("""
-# Simulatore di Equazioni alle Derivate Parziali (Paraboliche)
-## Modello di Advezione-Diffusione-Reazione in Ambienti Urbani
-Questo strumento risolve numericamente l'equazione del trasporto di inquinanti considerando orografia, 
-topografia urbana e reazioni chimiche (es. idrolisi con umidità).
-""")
+# --- PARAMETRI DI INPUT ---
+st.sidebar.header("Parametri Meteo e Sorgente")
 
-# --- TEORIA MATEMATICA (PER LA TESI) ---
-with st.expander("📘 Riferimenti Matematici e Modello Discretizzato"):
-    st.latex(r'''
-    \frac{\partial C}{\partial t} + \mathbf{u} \cdot \nabla C = \nabla \cdot (\mathbf{K} \nabla C) - R(C) + S
-    ''')
-    st.markdown("""
-    Dove:
-    * $\partial C / \partial t$: Variazione temporale della concentrazione.
-    * $\mathbf{u} \cdot \nabla C$: **Termine di Advezione** (Trasporto del vento). Risolto con schema *Upwind*.
-    * $\nabla \cdot (\mathbf{K} \nabla C)$: **Termine di Diffusione** (Dispersione turbolenta). Risolto con differenze centrali.
-    * $R(C) = (k_{reac} + k_{dep})C$: **Termine di Reazione/Rimozione** (Decadimento chimico e deposizione secca).
-    * $S$: Termine sorgente (Fuga di gas).
-    """)
+u = st.sidebar.slider("Velocita del vento (u) [m/s]", 0.1, 5.0, 1.0)
+D = st.sidebar.slider("Coefficiente di Diffusione (K)", 0.1, 2.0, 1.0)
 
-# --- SIDEBAR: PARAMETRI FISICI ---
-st.sidebar.header("1. Parametri Ambientali")
-u_base = st.sidebar.slider("Velocità Vento (u) [m/s]", 0.5, 15.0, 5.0)
-dir_vento = st.sidebar.slider("Direzione Vento (gradi)", -45, 45, 0)
-diffusivita = st.sidebar.select_slider("Diffusività Turbolenta (K)", 
-                                       options=[0.1, 0.5, 2.0, 5.0], 
-                                       value=0.5,
-                                       help="Classe di stabilità di Pasquill: Bassa=Notte/Stabile, Alta=Giorno/Instabile")
+sostanza = st.sidebar.selectbox("Inquinante", ["Gas Tossico", "NO2", "CO"])
+soglia = 0.05 if sostanza == "Gas Tossico" else 0.1 if sostanza == "NO2" else 9.0
 
-st.sidebar.header("2. Termini di Reazione")
-umidita = st.sidebar.radio("Condizioni Meteo", ["Secco", "Umido", "Pioggia"], index=0)
-k_map = {"Secco": 0.0, "Umido": 0.05, "Pioggia": 0.2}
-k_reac = k_map[umidita]
-k_dep = st.sidebar.slider("Coeff. Deposizione al suolo", 0.0, 0.1, 0.01)
+q_rate = st.sidebar.slider("Intensita Sorgente (Q)", 10, 200, 100)
 
-st.sidebar.header("3. Geometria Dominio")
-n_obst = st.sidebar.slider("Numero Blocchi Urbani", 0, 5, 2)
-h_hill = st.sidebar.slider("Altezza Collina (Orografia)", 0, 20, 10)
+# --- CONFIGURAZIONE GRIGLIA E STABILITÀ ---
+nx, ny = 50, 50
+dx = 1.0
 
-# --- INIZIALIZZAZIONE GRIGLIA E DOMINIO ---
-nx, ny = 100, 60
-dx = dy = 2.0  # metri per cella
-X, Y = np.meshgrid(np.arange(nx)*dx, np.arange(ny)*dy)
+# PROTEZIONE NUMERICA: Calcolo automatico del dt (Condizione CFL)
+# Più il vento è forte, più il tempo deve essere piccolo per non far esplodere i calcoli.
+dt = 0.5 * (dx / (u + D + 0.1)) # Fattore di sicurezza 0.5
+if dt > 0.1: dt = 0.1 # Cap massimo per fluidità
 
-# 1. Creazione Orografia (Collina Gaussiana)
-Z_oro = h_hill * np.exp(-((X - 120)**2 + (Y - 60)**2) / 1000)
+# Generazione ostacoli
+obstacles = np.zeros((nx, ny))
+np.random.seed(42)
+for _ in range(12):
+    ox, oy = np.random.randint(20, 45), np.random.randint(10, 40)
+    obstacles[ox:ox+3, oy:oy+3] = 1
 
-# 2. Creazione Ostacoli Urbani (Matrice Maschera)
-# 0 = aria libera, 1 = edificio
-obstacles = np.zeros((ny, nx))
-if n_obst > 0:
-    for i in range(n_obst):
-        x_start = 40 + i * 15
-        obstacles[25:35, x_start:x_start+5] = 1 # Edifici rettangolari
-
-# 3. Calcolo Passo Temporale (CFL Stability Condition)
-# Per la stabilità, dt deve soddisfare la condizione CFL:
-# dt <= dx^2 / (4*K)  (Diffusione)
-# dt <= dx / u        (Advezione)
-dt_diff = (dx**2) / (4 * diffusivita)
-dt_adv = dx / (u_base + 0.1) # +0.1 per evitare div by zero
-dt = min(dt_diff, dt_adv) * 0.8 # Fattore di sicurezza 0.8
-st.sidebar.markdown(f"**$\Delta t$ calcolato:** {dt:.4f} s (Stabilità CFL garantita)")
-
-# --- LOGICA DI RISOLUZIONE (SOLVER) ---
-def run_simulation():
-    # Inizializzazione Concentrazione
-    C = np.zeros((ny, nx))
+def esegui_simulazione():
+    C = np.zeros((nx, ny))
+    grafico = st.empty()
+    testo = st.empty()
     
-    # Pre-calcolo velocità vento (Semplificato: deviazione leggera dovuta alla collina)
-    # Vento prevalentemente lungo X
-    U = np.ones((ny, nx)) * u_base * np.cos(np.radians(dir_vento))
-    V = np.ones((ny, nx)) * u_base * np.sin(np.radians(dir_vento))
-    
-    # Il vento rallenta "dietro" la collina (effetto scia semplice) e sugli edifici
-    U = U * (1 - 0.02 * Z_oro) 
-    U[obstacles == 1] = 0
-    V[obstacles == 1] = 0
+    # Sorgente fissa
+    sx, sy = 10, 25
 
-    # Loop Temporale
-    simulation_steps = 150
-    placeholder = st.empty()
-    stats_placeholder = st.empty()
-    
-    start_time = time.time()
-    
-    for t in range(simulation_steps):
-        Cn = C.copy()
+    for t in range(100):
+        C_new = C.copy()
         
-        # --- DISCRETIZZAZIONE FINITE DIFFERENCE ---
+        # Emissione
+        C_new[sx, sy] += q_rate * dt
         
-        # 1. Diffusione (Schema Centrato a 5 punti)
-        # d^2C/dx^2 approx (C[i+1] - 2C[i] + C[i-1]) / dx^2
-        laplacian = (
-            (np.roll(Cn, -1, axis=1) - 2*Cn + np.roll(Cn, 1, axis=1)) / dx**2 +
-            (np.roll(Cn, -1, axis=0) - 2*Cn + np.roll(Cn, 1, axis=0)) / dy**2
-        )
+        # Calcolo ADR con protezione
+        for i in range(1, nx-1):
+            for j in range(1, ny-1):
+                if obstacles[i,j] == 1:
+                    C_new[i,j] = 0
+                    continue
+                
+                # Formule discretizzate
+                diff = D * dt * (C[i+1,j] + C[i-1,j] + C[i,j+1] + C[i,j-1] - 4*C[i,j]) / (dx**2)
+                adv = -u * dt * (C[i,j] - C[i-1,j]) / dx
+                
+                C_new[i,j] += diff + adv
         
-        # 2. Advezione (Schema Upwind - Primo Ordine)
-        # Se u > 0: (C[i] - C[i-1]) / dx
-        adv_x = np.zeros_like(Cn)
-        adv_y = np.zeros_like(Cn)
+        # FILTRO DI REALTÀ: Impedisce valori negativi o infiniti
+        C = np.clip(C_new, 0, 100) 
         
-        # Gestione semplificata Upwind per vento positivo lungo X
-        adv_x = U * (Cn - np.roll(Cn, 1, axis=1)) / dx
-        # Gestione semplificata Upwind per vento lungo Y (segno dipende da dir_vento)
-        if dir_vento >= 0:
-            adv_y = V * (Cn - np.roll(Cn, 1, axis=0)) / dy
-        else:
-            adv_y = V * (np.roll(Cn, -1, axis=0) - Cn) / dy
-
-        # 3. Reazione e Deposizione
-        reaction = (k_reac + k_dep) * Cn
-
-        # 4. Aggiornamento Temporale (Eulero Esplicito)
-        C = Cn + dt * (diffusivita * laplacian - (adv_x + adv_y) - reaction)
-        
-        # 5. Condizioni al Contorno e Sorgente
-        # Sorgente continua (es. camino industriale o perdita)
-        if t < 100: # La perdita dura solo per un certo tempo
-            C[ny//2, 10] = 100.0 
-        
-        # Condizioni Dirichlet ai bordi (0 concentrazione all'infinito)
-        C[:, 0] = 0; C[:, -1] = 0; C[0, :] = 0; C[-1, :] = 0
-        
-        # Condizioni sugli ostacoli (Muri impermeabili o assorbenti)
-        C[obstacles == 1] = 0 
-
-        # --- VISUALIZZAZIONE OGNI 10 STEP ---
-        if t % 5 == 0:
-            # Creiamo un plot 3D combinato: Superficie Orografica + Heatmap Inquinante
-            fig = go.Figure()
-
-            # Orografia (Wireframe o Surface grigia)
-            fig.add_trace(go.Surface(
-                z=Z_oro, 
-                x=X, y=Y, 
-                colorscale='Gray', 
-                opacity=0.3, 
-                showscale=False,
-                name="Orografia"
-            ))
-
-            # Inquinante (Heatmap proiettata o Surface colorata sopra l'orografia)
-            # Aggiungiamo un piccolo offset z per vederla sopra il terreno
-            fig.add_trace(go.Surface(
-                z=Z_oro + 0.5 + (C/np.max(C)*10 if np.max(C)>0 else 0), # Esagerazione verticale per visibilità
-                x=X, y=Y,
-                surfacecolor=C,
-                colorscale='Jet',
-                cmin=0, cmax=20, # Saturazione visuale
-                opacity=0.9,
-                name="Concentrazione",
-                colorbar=dict(title="Conc. [ppm]")
-            ))
-
-            # Aggiungi Edifici (Come scatter 3D o cubi - qui semplificato come punti alti)
-            if n_obst > 0:
-                obs_y, obs_x = np.where(obstacles == 1)
-                fig.add_trace(go.Scatter3d(
-                    x=obs_x*dx, y=obs_y*dy, z=np.ones_like(obs_x)*10,
-                    mode='markers',
-                    marker=dict(size=5, color='black', symbol='square'),
-                    name="Edifici"
-                ))
-
-            fig.update_layout(
-                title=f"Evoluzione Temporale: t = {t*dt:.1f} s",
-                scene=dict(
-                    xaxis_title="X [m]",
-                    yaxis_title="Y [m]",
-                    zaxis_title="Quota [m]",
-                    zaxis=dict(range=[0, 30]),
-                    aspectratio=dict(x=2, y=1, z=0.5)
-                ),
-                margin=dict(l=0, r=0, b=0, t=40)
-            )
+        if t % 10 == 0:
+            # Valutazione rischio (Normalizzata per evitare picchi assurdi)
+            impatto = np.max(C[20:45, 10:40]) * 0.1
             
-            placeholder.plotly_chart(fig, use_container_width=True)
+            fig = go.Figure(data=[
+                go.Surface(z=C, colorscale='YlOrRd', showscale=False),
+                go.Surface(z=obstacles * 2, colorscale='Greys', opacity=0.5, showscale=False)
+            ])
+            fig.update_layout(scene=dict(zaxis=dict(range=[0, 10])), margin=dict(l=0, r=0, b=0, t=0))
+            grafico.plotly_chart(fig, use_container_width=True)
             
-            # Statistiche in tempo reale
-            max_c = np.max(C)
-            tot_mass = np.sum(C)*dx*dy
-            stats_placeholder.markdown(f"""
-            **Monitoraggio in tempo reale:**
-            * Picco Concentrazione: `{max_c:.2f} ppm`
-            * Massa Totale Inquinante: `{tot_mass:.2f} kg_eq`
-            """)
-            
-            # Piccolo sleep per vedere l'animazione
-            time.sleep(0.05)
+            stato = "ALLERTA" if impatto > soglia else "SICURO"
+            testo.write(f"Stato: {stato} | Concentrazione rilevata: {impatto:.3f} ppm | Soglia: {soglia}")
 
-# --- TASTO START ---
-if st.button("🚀 Avvia Simulazione Numerica"):
-    run_simulation()
-else:
-    st.info("Configura i parametri nella barra laterale e premi 'Avvia' per calcolare la dispersione.")
+if st.sidebar.button("Avvia Analisi"):
+    esegui_simulazione()
