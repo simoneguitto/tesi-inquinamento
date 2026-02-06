@@ -2,74 +2,121 @@ import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Simulatore ADR - Urban Risk", layout="wide")
-st.title("Simulatore Dispersione Inquinanti (Modello ADR)")
-st.caption("Evoluzione numerica basata sui modelli di Advezione-Diffusione (Rif. F. Fedi, 2009)")
+# Configurazione dell'applicazione
+st.set_page_config(page_title="Simulatore Dispersione Atmosferica", layout="wide")
+st.title("Simulatore Numerico di Dispersione Inquinanti")
+st.write("Analisi dell'equazione di Advezione-Diffusione con termini di deposizione umida.")
 
-# --- PARAMETRI METEO ---
-st.sidebar.header("Condizioni Ambientali")
-meteo = st.sidebar.selectbox("Atmosfera", ["Instabile (Sole)", "Neutra (Coperto)", "Stabile (Inversione)"])
-pioggia = st.sidebar.radio("Precipitazioni (Wet Deposition)", ["Nessuna", "Leggera", "Forte"])
+# --- AREA INPUT: METEOROLOGIA E AMBIENTE ---
+st.sidebar.header("Variabili Meteorologiche")
 
-# Parametri basati sulla tesi
-if meteo == "Instabile (Sole)": D_val, u_val = 1.6, 1.0
-elif meteo == "Neutra (Coperto)": D_val, u_val = 1.0, 2.0
-else: D_val, u_val = 0.2, 0.5
+# Evoluzione rispetto al modello base: Integrazione dinamica della stabilita
+condizione_atmosferica = st.sidebar.selectbox(
+    "Stabilità Atmosferica", 
+    ["Instabile (Forte Turbolenza)", "Neutra", "Stabile (Inversione Termica)"]
+)
 
-k_reac = 0.01 if pioggia == "Nessuna" else 0.1 if pioggia == "Leggera" else 0.25
+# Gestione Precipitazioni (Miglioramento tecnico rispetto ai modelli statici)
+pioggia = st.sidebar.select_slider(
+    "Intensità Pioggia (Wet Deposition)",
+    options=["Nessuna", "Leggera", "Moderata", "Forte"]
+)
 
-u = st.sidebar.slider("Vento (u) [m/s]", 0.1, 5.0, u_val)
-D = st.sidebar.slider("Diffusione (K)", 0.1, 2.0, D_val)
+# Assegnazione parametri fisici (u = vento, D = diffusione, k = decadimento)
+if condizione_atmosferica == "Instabile (Forte Turbolenza)":
+    D_val, u_val = 1.8, 0.8
+elif condizione_atmosferica == "Neutra":
+    D_val, u_val = 1.0, 1.5
+else:
+    D_val, u_val = 0.2, 0.4
 
-# --- SORGENTE E GRIGLIA ---
-sostanza = st.sidebar.selectbox("Sostanza (Rif. Bhopal)", ["Gas Tossico (MIC)", "NO2", "CO"])
-soglia = 0.05 if sostanza == "Gas Tossico (MIC)" else 0.1 if sostanza == "NO2" else 9.0
-q_rate = st.sidebar.slider("Sorgente (Q)", 50, 250, 100)
+# Effetto di lavaggio atmosferico (Scavenging) dovuto alla pioggia
+scavenging_map = {"Nessuna": 0.01, "Leggera": 0.07, "Moderata": 0.15, "Forte": 0.30}
+k_reac = scavenging_map[pioggia]
 
-nx, ny, dx = 50, 50, 1.0
-dt = 0.4 * (dx / (u + D + 0.1)) # Stabilità CFL
+u = st.sidebar.slider("Velocità del Vento (u) [m/s]", 0.1, 5.0, u_val)
+D = st.sidebar.slider("Coefficiente di Diffusione (K)", 0.1, 2.5, D_val)
+
+# --- CONFIGURAZIONE SORGENTE E SOSTANZA ---
+st.sidebar.header("Parametri Chimici")
+tipo_gas = st.sidebar.selectbox("Inquinante Target", ["Gas Altamente Tossico", "Biossido di Azoto", "Monossido di Carbonio"])
+
+# Soglie basate su letteratura scientifica (es. caso Bhopal citato in letteratura)
+if tipo_gas == "Gas Altamente Tossico":
+    soglia = 0.05
+elif tipo_gas == "Biossido di Azoto":
+    soglia = 0.1
+else:
+    soglia = 9.0
+
+q_rate = st.sidebar.slider("Portata Emissione (Q)", 50, 250, 120)
+
+# --- MOTORE DI CALCOLO NUMERICO ---
+nx, ny = 50, 50
+dx = 1.0
+
+# Calcolo automatico del passo temporale per garantire la stabilita (CFL condition)
+dt = 0.4 * (dx / (u + D + 0.1))
 if dt > 0.05: dt = 0.05
 
-# Edifici
+# Generazione Griglia Ostacoli (Edifici)
 obstacles = np.zeros((nx, ny))
 np.random.seed(42)
 for _ in range(12):
-    ox, oy = np.random.randint(20, 45), np.random.randint(10, 40)
+    ox, oy = np.random.randint(18, 45), np.random.randint(10, 40)
     obstacles[ox:ox+3, oy:oy+3] = 1
 
-def run():
+def avvia_simulazione():
     C = np.zeros((nx, ny))
-    plot = st.empty()
-    info = st.empty()
+    frame_grafico = st.empty()
+    frame_testo = st.empty()
     
+    # Punto di rilascio inquinante
+    sx, sy = 10, 25
+
     for t in range(130):
         C_new = C.copy()
-        C_new[10, 25] += q_rate * dt # Sorgente
+        C_new[sx, sy] += q_rate * dt
         
+        # Risoluzione alle differenze finite dell'equazione ADR
         for i in range(1, nx-1):
             for j in range(1, ny-1):
                 if obstacles[i,j] == 1:
-                    C_new[i,j] = 0
+                    C_new[i,j] = 0 # Gli edifici sono barriere impermeabili
                     continue
-                # Formula ADR (Advezione-Diffusione-Reazione)
+                
+                # Termini della formula: Diffusione + Advezione + Reazione (Pioggia)
                 diff = D * dt * (C[i+1,j] + C[i-1,j] + C[i,j+1] + C[i,j-1] - 4*C[i,j])
-                adv = -u * dt * (C[i,j] - C[i-1,j])
+                adv = -u * dt * (C[i,j] - C[i-1,j]) # Schema Upwind
                 reac = -k_reac * dt * C[i,j]
+                
                 C_new[i,j] += diff + adv + reac
 
+        # Clamp per stabilita numerica
         C = np.clip(C_new, 0, 50)
         
-        if t % 13 == 0:
-            picco = np.max(C[20:45, 10:40]) * 0.12
-            fig = go.Figure(data=[
-                go.Surface(z=C, colorscale='YlOrRd', showscale=True),
-                go.Surface(z=obstacles * 2, colorscale='Greys', opacity=0.4, showscale=False)
-            ])
-            fig.update_layout(scene=dict(zaxis=dict(range=[0, 12])), margin=dict(l=0, r=0, b=0, t=0))
-            plot.plotly_chart(fig, use_container_width=True)
+        if t % 12 == 0:
+            # Rilevamento concentrazione critica sugli edifici
+            picco_urbano = np.max(C[obstacles == 1 + 1] if np.any(obstacles) else 0)
+            picco_realistico = np.max(C[20:45, 10:40]) * 0.13
             
-            res = "ALLERTA" if picco > soglia else "SICURO"
-            info.write(f"**Stato:** {res} | **Picco Edifici:** {picco:.3f} ppm | **Soglia:** {soglia}")
+            # Rendering 3D
+            fig = go.Figure(data=[
+                go.Surface(z=C, colorscale='Reds', name="Nube Inquinante"),
+                go.Surface(z=obstacles * 2.5, colorscale='Greys', opacity=0.5, showscale=False, name="Edifici")
+            ])
+            fig.update_layout(
+                scene=dict(zaxis=dict(range=[0, 15])),
+                margin=dict(l=0, r=0, b=0, t=0),
+                height=600
+            )
+            frame_grafico.plotly_chart(fig, use_container_width=True)
+            
+            # Valutazione rischio
+            if picco_realistico > soglia:
+                frame_testo.error(f"STATO: ALLERTA CRITICA | Concentrazione rilevata: {picco_realistico:.3f} ppm | Soglia limite: {soglia}")
+            else:
+                frame_testo.success(f"STATO: LIVELLI NELLA NORMA | Concentrazione rilevata: {picco_realistico:.3f} ppm | Soglia limite: {soglia}")
 
-if st.sidebar.button("Esegui Simulazione"):
-    run()
+if st.sidebar.button("Esegui Modello Numerico"):
+    avvia_simulazione()
