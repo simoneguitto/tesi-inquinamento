@@ -2,104 +2,109 @@ import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 
-# --- IMPOSTAZIONI ---
-st.set_page_config(page_title="Simulatore Gas", layout="wide")
-st.title("Simulazione Dispersione Gas e Ostacoli")
-st.write("Analisi del movimento del gas tra palazzi e colline.")
+# --- CONFIGURAZIONE INTERFACCIA ---
+st.set_page_config(page_title="Simulatore Dispersione Meteorologica", layout="wide")
+st.title("Analisi della Dispersione in Ambienti con Ostacoli Multipli")
+st.write("Studio dell'impatto meteorologico e topografico sulla diffusione di gas tossici.")
 
-# --- COMANDI LATERALI (MENU) ---
-st.sidebar.header("Meteo e Vento")
-aria = st.sidebar.selectbox("Tipo di Aria", ["Giorno (Movimentata)", "Standard", "Notte (Fermo)"])
+# --- INPUT METEOROLOGICI (SIDEBAR) ---
+st.sidebar.header("Condizioni Atmosferiche")
+tipo_aria = st.sidebar.selectbox("Stabilità Atmosferica", ["Instabile (Turbolenta)", "Neutra", "Stabile (Ristagno)"])
 
-if aria == "Giorno (Movimentata)":
-    u_v, k_v = 1.2, 1.8 
-elif aria == "Standard":
-    u_v, k_v = 1.5, 1.0 
+# Parametri che variano in base alla meteorologia scelta
+if tipo_aria == "Instabile (Turbolenta)":
+    v_def, k_def = 1.0, 1.9  # Vento calmo, molta dispersione laterale
+elif tipo_aria == "Neutra":
+    v_def, k_def = 1.5, 1.0  # Condizioni standard
 else:
-    u_v, k_v = 0.6, 0.2
+    v_def, k_def = 0.6, 0.2  # Vento debole, gas molto concentrato (Pericolo!)
 
-velocita = st.sidebar.slider("Velocità Vento", 0.1, 5.0, u_v)
-diffusione = st.sidebar.slider("Allargamento Gas (K)", 0.1, 2.5, k_v)
+u_vento = st.sidebar.slider("Velocità del Vento (u) [m/s]", 0.1, 5.0, v_def)
+k_diff = st.sidebar.slider("Diffusione Turbolenta (K)", 0.1, 2.5, k_def)
 
-st.sidebar.header("Pioggia e Sostanza")
-pioggia = st.sidebar.select_slider("Intensità Pioggia", options=["Nessuna", "Debole", "Forte"])
-tipo_sostanza = st.sidebar.selectbox("Sostanza Inquinante", ["Molto Solubile", "Media", "Poco Solubile"])
+st.sidebar.header("Variabili di Lavaggio (Pioggia)")
+pioggia = st.sidebar.select_slider("Intensità Precipitazione", options=["Zero", "Leggera", "Forte"])
+solubilita = st.sidebar.selectbox("Tipo Sostanza", ["Alta", "Media", "Bassa"])
 
-# Calcolo lavaggio pioggia
-p_m = {"Nessuna": 0.0, "Debole": 0.1, "Forte": 0.25}[pioggia]
-s_i = {"Molto Solubile": 1.0, "Media": 0.7, "Poco Solubile": 0.3}[tipo_sostanza]
-soglia_allarme = 0.06 if tipo_sostanza == "Molto Solubile" else 0.12
+# Parametri di abbattimento fisico
+sigma_p = {"Zero": 0.0, "Leggera": 0.12, "Forte": 0.25}[pioggia]
+s_index = {"Alta": 1.0, "Media": 0.7, "Bassa": 0.3}[solubilita]
+soglia_allarme = 0.06 if solubilita == "Alta" else 0.15
 
-# --- CREAZIONE MAPPA (PALAZZI E COLLINE) ---
+# --- CREAZIONE DEL DOMINIO (TOPOGRAFIA E OROGRAFIA) ---
 N = 50
-griglia_ostacoli = np.zeros((N, N))
-griglia_colline = np.zeros((N, N))
+dx = 1.0
+dt = 0.02
+edifici = np.zeros((N, N))
+colline = np.zeros((N, N))
 
-# 1. Palazzi sparsi a caso (non a scacchiera)
-griglia_ostacoli[8:12, 28:31] = 1   # Palazzo vicinissimo alla sorgente
-griglia_ostacoli[25:28, 15:20] = 1  # Palazzo centrale
-griglia_ostacoli[35:40, 30:33] = 1  # Palazzo lontano
-griglia_ostacoli[15:18, 10:13] = 1  # Altro palazzo sparso
+# 1. TOPOGRAFIA: Posizionamento mirato dei palazzi
+# Palazzo 1: Esattamente in traiettoria (davanti alla sorgente)
+edifici[18:23, 23:26] = 1 
+# Palazzi di contorno sparsi (non a scacchiera)
+edifici[10:13, 10:14] = 1 
+edifici[35:40, 15:18] = 1 
+edifici[28:33, 35:38] = 1 
 
-# 2. Due Colline
+# 2. OROGRAFIA: Due colline dinamiche
 for i in range(N):
     for j in range(N):
-        # Collina 1: Piccola e vicina alla sorgente
-        d1 = np.sqrt((i-10)**2 + (j-15)**2)
-        if d1 < 8: griglia_colline[i,j] += 2 * np.exp(-0.1 * d1**2)
+        # Collina piccola vicino alla sorgente (deviazione iniziale)
+        dist1 = np.sqrt((i-8)**2 + (j-18)**2)
+        if dist1 < 7: colline[i,j] += 2.5 * np.exp(-0.1 * dist1**2)
         
-        # Collina 2: Alta e lontana
-        d2 = np.sqrt((i-40)**2 + (j-25)**2)
-        if d2 < 15: griglia_colline[i,j] += 5 * np.exp(-0.03 * d2**2)
+        # Collina grande in fondo (barriera finale)
+        dist2 = np.sqrt((i-42)**2 + (j-25)**2)
+        if dist2 < 14: colline[i,j] += 5.5 * np.exp(-0.04 * dist2**2)
 
-# --- CALCOLO MATEMATICO ---
-if st.sidebar.button("AVVIA SIMULAZIONE"):
+# --- CALCOLO NUMERICO (Modello ADR) ---
+if st.sidebar.button("CALCOLA MODELLO"):
     C = np.zeros((N, N))
-    mappa_display = st.empty()
-    testo_display = st.empty()
+    mappa_plot = st.empty()
+    alert_text = st.empty()
     
-    # Sorgente gas
+    # Sorgente gas (sx, sy)
     sx, sy = 5, 25 
 
-    for t in range(160):
+    for t in range(165):
         Cn = C.copy()
-        Cn[sx, sy] += 140 * 0.02 # Rilascio gas
+        Cn[sx, sy] += 135 * dt # Rilascio costante di inquinante
         
         for i in range(1, N-1):
             for j in range(1, N-1):
-                if griglia_ostacoli[i,j] == 1:
+                if edifici[i,j] == 1:
                     continue
                 
-                # Formule: Movimento + Allargamento - Pioggia
-                diff = diffusione * 0.02 * (C[i+1,j] + C[i-1,j] + C[i,j+1] + C[i,j-1] - 4*C[i,j])
-                adv = -velocita * 0.02 * (C[i,j] - C[i-1,j])
-                reac = -(p_m * s_i) * 0.02 * C[i,j]
+                # Equazione: Trasporto + Allargamento - Lavaggio pioggia
+                diff = k_diff * dt * (C[i+1,j] + C[i-1,j] + C[i,j+1] + C[i,j-1] - 4*C[i,j])
+                adv = -u_vento * dt * (C[i,j] - C[i-1,j]) # Trasporto lungo asse X
+                reac = -(sigma_p * s_index) * dt * C[i,j]
                 
                 Cn[i,j] += diff + adv + reac
 
-        # Effetto aderenza ai palazzi (niente vuoto visivo)
-        C = np.where(griglia_ostacoli == 1, 0, Cn)
+        # Effetto aderenza topografica (niente vuoto visivo)
+        C = np.where(edifici == 1, 0, Cn)
         C = np.clip(C, 0, 100)
         
         if t % 15 == 0:
             picco_attuale = np.max(C[10:45, 10:45]) * 0.15
             
-            # Grafico con scala colori Jet (Blu-Verde-Rosso)
+            # Grafico con scala Jet (identico a modelli scientifici)
             fig = go.Figure(data=[
-                go.Surface(z=C + griglia_colline, colorscale='Jet', name="Gas"),
-                go.Surface(z=griglia_ostacoli * 3.5, colorscale='Greys', opacity=0.8, showscale=False),
-                go.Surface(z=griglia_colline, colorscale='Greens', opacity=0.3, showscale=False)
+                go.Surface(z=C + colline, colorscale='Jet', name="Gas"),
+                go.Surface(z=edifici * 3.8, colorscale='Greys', opacity=0.85, showscale=False),
+                go.Surface(z=colline, colorscale='Greens', opacity=0.3, showscale=False)
             ])
             
             fig.update_layout(
-                scene=dict(zaxis=dict(range=[0, 15]), xaxis_title='Metri X', yaxis_title='Metri Y'),
-                margin=dict(l=0, r=0, b=0, t=0), height=700
+                scene=dict(zaxis=dict(range=[0, 15]), xaxis_title='X [m]', yaxis_title='Y [m]'),
+                margin=dict(l=0, r=0, b=0, t=0), height=750
             )
-            mappa_display.plotly_chart(fig, use_container_width=True)
+            mappa_plot.plotly_chart(fig, use_container_width=True)
             
             if picco_attuale > soglia_allarme:
-                testo_display.error(f"SOGLIA SUPERATA: {picco_attuale:.4f} ppm")
+                alert_text.error(f"SOGLIA CRITICA: {picco_attuale:.4f} ppm - Rilevato impatto su edifici")
             else:
-                testo_display.success(f"LIVELLO SICURO: {picco_attuale:.4f} ppm")
+                alert_text.success(f"STATO: {picco_attuale:.4f} ppm - Dispersione controllata")
 
-    st.info("Simulazione conclusa. Il gas è stato deviato dai palazzi e dalle colline.")
+    st.info("Analisi completata. Il gas impatta direttamente il primo ostacolo topografico prima di diffondersi nel resto del dominio.")
