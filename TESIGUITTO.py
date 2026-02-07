@@ -11,7 +11,7 @@ dt = 0.02 # Passo temporale
 if 'C' not in st.session_state:
     st.session_state.C = np.zeros((N, N))
 
-st.title("Simulatore ADR: Impatto Atmosferico e Washout (mm/h)")
+st.title("CIAO MAMMA E PAPà Simulatore ADR: Impatto Atmosferico e Washout (mm/h)")
 st.markdown("### Modello Sperimentale Avanzato - Candidato: Guitto Simone")
 
 # --- 2. SIDEBAR CON METEO REALE ---
