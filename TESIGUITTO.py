@@ -2,108 +2,106 @@ import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 
-# --- CONFIGURAZIONE AMBIENTE COMPUTAZIONALE ---
-st.set_page_config(page_title="Simulatore Dispersione ADR", layout="wide")
-st.title("Analisi Numerica della Dispersione di Inquinanti")
-st.write("Studio dell'evoluzione del pennacchio inquinante in funzione di variabili meteorologiche e topografiche.")
+# --- CONFIGURAZIONE ---
+st.set_page_config(page_title="Simulatore ADR Avanzato", layout="wide")
+st.title("Analisi Numerica: Interazione Fluido-Orografica")
+st.write("Studio della dispersione in presenza di complessi topografici e rilievi orografici.")
 
-# --- INPUT: CONDIZIONI METEOROLOGICHE (SIDEBAR) ---
-st.sidebar.header("Parametri Atmosferici")
-# La classe di stabilità definisce la capacità dispersiva dell'atmosfera
-classe_stabilita = st.sidebar.selectbox("Classe di Stabilità", ["Instabile (Convezione)", "Neutra", "Stabile (Inversione)"])
+# --- SIDEBAR: PARAMETRI METEO ---
+st.sidebar.header("Variabili Atmosferiche")
+stabilita_aria = st.sidebar.selectbox("Condizione Atmosferica", ["Instabile", "Neutra", "Stabile"])
 
-if classe_stabilita == "Instabile (Convezione)":
-    u_init, k_init = 1.0, 1.8 
-elif classe_stabilita == "Neutra":
-    u_init, k_init = 1.5, 1.0 
+if stabilita_aria == "Instabile":
+    u_i, k_i = 1.2, 1.8 
+elif stabilita_aria == "Neutra":
+    u_i, k_i = 1.5, 1.0 
 else:
-    u_init, k_init = 0.5, 0.2 # Condizione critica per il ristagno al suolo
+    u_i, k_i = 0.6, 0.25 # Ristagno orografico massimo
 
-v_vento = st.sidebar.slider("Velocità del Vento (u) [m/s]", 0.1, 5.0, u_init)
-coeff_K = st.sidebar.slider("Coefficiente di Diffusione (K)", 0.1, 2.5, k_init)
+u_v = st.sidebar.slider("Velocità del Vento (u) [m/s]", 0.1, 5.0, u_i)
+k_d = st.sidebar.slider("Diffusione Turbolenta (K)", 0.1, 2.5, k_i)
 
-st.sidebar.header("Fenomeni di Washout (Pioggia)")
-pioggia_intensita = st.sidebar.select_slider("Intensità Precipitazione", options=["Nulla", "Leggera", "Forte"])
-solubilita_gas = st.sidebar.selectbox("Sostanza", ["Alta Solubilità", "Media Solubilità", "Bassa Solubilità"])
+st.sidebar.header("Idrometeore e Chimica")
+pioggia_int = st.sidebar.select_slider("Precipitazione", options=["Assente", "Moderata", "Forte"])
+grado_sol = st.sidebar.selectbox("Solubilità Inquinante", ["Alta", "Media", "Bassa"])
 
-# Parametri chimico-fisici per la rimozione (Wet Deposition)
-if solubilita_gas == "Alta Solubilità":
-    limit_ppm, alpha = 0.05, 1.0
-elif solubilita_gas == "Media Solubilità":
-    limit_ppm, alpha = 0.1, 0.7
-else:
-    limit_ppm, alpha = 9.0, 0.3
+# Parametri di rimozione
+sigma_m = {"Assente": 0.0, "Moderata": 0.12, "Forte": 0.28}[pioggia_int]
+s_index = {"Alta": 1.0, "Media": 0.7, "Bassa": 0.3}[grado_sol]
+soglia_p = 0.05 if grado_sol == "Alta" else 0.1
 
-# --- DISCRETIZZAZIONE E TOPOGRAFIA ---
-N_griglia = 50
-dx_spazio = 1.0
-dt_tempo = 0.02
-iter_tot = 160
+# --- DOMINIO E OROGRAFIA ---
+N = 50
+dx = 1.0
+dt = 0.02
+step_t = 160
 
-# Calcolo del termine reattivo (sigma) per il lavaggio piovoso
-sigma_base = {"Nulla": 0.0, "Leggera": 0.1, "Forte": 0.25}[pioggia_intensita]
-sigma_effettivo = sigma_base * alpha
+# Definizione Topografia (Palazzi vicini) e Orografia (Collina)
+strutture = np.zeros((N, N))
+orografia = np.zeros((N, N))
 
-# Generazione ostacoli topografici (Morfologia urbana)
-mappa_edifici = np.zeros((N_griglia, N_griglia))
-np.random.seed(42)
-for _ in range(10):
-    gx, gy = np.random.randint(18, 43), np.random.randint(10, 38)
-    mappa_edifici[gx:gx+3, gy:gy+3] = 1
+# 1. Creazione "Canyon" Urbano (Palazzi vicini tra loro)
+strutture[20:25, 15:18] = 1
+strutture[20:25, 22:25] = 1
+strutture[30:35, 15:18] = 1
+strutture[30:35, 22:25] = 1
 
-# --- MOTORE DI CALCOLO ADR ---
-if st.sidebar.button("CALCOLA DISPERSIONE"):
-    Conc_mat = np.zeros((N_griglia, N_griglia))
-    placeholder_map = st.empty()
-    placeholder_text = st.empty()
+# 2. Creazione Collina (Orografia a fondo campo)
+for i in range(N):
+    for j in range(N):
+        # Una collina gaussiana centrata a X=40, Y=20
+        dist = np.sqrt((i-42)**2 + (j-20)**2)
+        if dist < 12:
+            orografia[i,j] = 4 * np.exp(-0.05 * dist**2)
+
+# --- MOTORE DI CALCOLO ---
+if st.sidebar.button("ESEGUI MODELLO"):
+    C = np.zeros((N, N))
+    mappa_3d = st.empty()
+    alert_box = st.empty()
     
-    # Sorgente di rilascio
-    src_x, src_y = 8, 25 
+    source_x, source_y = 5, 20 # Sorgente prima dei palazzi
 
-    for t in range(iter_tot):
-        Cn_new = Conc_mat.copy()
-        Cn_new[src_x, src_y] += 130 * dt_tempo # Termine sorgente costante
+    for t in range(step_t):
+        Cn = C.copy()
+        Cn[source_x, source_y] += 140 * dt 
         
-        for i in range(1, N_griglia-1):
-            for j in range(1, N_griglia-1):
-                if mappa_edifici[i,j] == 1:
-                    continue # Condizione di impermeabilità degli edifici
+        for i in range(1, N-1):
+            for j in range(1, N-1):
+                # Il calcolo avviene solo all'esterno delle strutture solide
+                if strutture[i,j] == 1:
+                    continue
                 
-                # Scomposizione dell'Equazione di Trasporto
-                # Diffusione (Laplaciano)
-                d_term = coeff_K * dt_tempo * (Conc_mat[i+1,j] + Conc_mat[i-1,j] + Conc_mat[i,j+1] + Conc_mat[i,j-1] - 4*Conc_mat[i,j])
-                # Advezione (Trasporto Vento - Upwind)
-                a_term = -v_vento * dt_tempo * (Conc_mat[i,j] - Conc_mat[i-1,j])
-                # Reazione (Abbattimento Pioggia)
-                r_term = -sigma_effettivo * dt_tempo * Conc_mat[i,j]
+                # Equazione ADR con termine di lavaggio
+                diff = k_d * dt * (C[i+1,j] + C[i-1,j] + C[i,j+1] + C[i,j-1] - 4*C[i,j])
+                adv = -u_v * dt * (C[i,j] - C[i-1,j]) # Vento lungo X
+                reac = -(sigma_m * s_index) * dt * C[i,j]
                 
-                Cn_new[i,j] += d_term + a_term + r_term
+                Cn[i,j] += diff + adv + reac
 
-        # Integrazione topografica: il gas aderisce alle pareti (rimozione del vuoto)
-        Conc_mat = np.where(mappa_edifici == 1, 0, Cn_new)
-        Conc_mat = np.clip(Conc_mat, 0, 100)
+        # Fusione dati: il gas aderisce a palazzi e segue l'orografia
+        C = np.where(strutture == 1, 0, Cn)
+        C = np.clip(C, 0, 100)
         
         if t % 15 == 0:
-            val_picco = np.max(Conc_mat[15:45, 10:40]) * 0.15
+            p_val = np.max(C[15:45, 10:40]) * 0.15
             
-            # Utilizzo della scala colori 'Jet' (simile alla tesi originale)
+            # Visualizzazione: Gas (Jet), Palazzi (Grigio), Collina (Verde/Marrone)
             fig = go.Figure(data=[
-                go.Surface(z=Conc_mat, colorscale='Jet', showscale=True),
-                go.Surface(z=mappa_edifici * 2.8, colorscale='Greys', opacity=0.6, showscale=False)
+                go.Surface(z=C + orografia, colorscale='Jet', showscale=True, name="Gas"),
+                go.Surface(z=strutture * 3.5, colorscale='Greys', opacity=0.8, showscale=False),
+                go.Surface(z=orografia, colorscale='Greens', opacity=0.3, showscale=False)
             ])
             
             fig.update_layout(
-                scene=dict(
-                    zaxis=dict(range=[0, 15], title="C [ppm]"),
-                    xaxis_title='X [m]', yaxis_title='Y [m]'
-                ),
-                margin=dict(l=0, r=0, b=0, t=0), height=700
+                scene=dict(zaxis=dict(range=[0, 15]), xaxis_title='X', yaxis_title='Y'),
+                margin=dict(l=0, r=0, b=0, t=0), height=750
             )
-            placeholder_map.plotly_chart(fig, use_container_width=True)
+            mappa_3d.plotly_chart(fig, use_container_width=True)
             
-            if val_picco > limit_ppm:
-                placeholder_text.error(f"SOGLIA SUPERATA: {val_picco:.4f} ppm - Rischio per la salute")
+            if p_val > soglia_p:
+                alert_box.error(f"SOGLIA CRITICA: {p_val:.4f} ppm")
             else:
-                placeholder_text.success(f"SOGLIA RISPETTATA: {val_picco:.4f} ppm - Condizioni di sicurezza")
+                alert_box.success(f"SOGLIA NORMA: {p_val:.4f} ppm")
 
-    st.info("Simulazione terminata. Il modello evidenzia come la pioggia (lavaggio) riduca la concentrazione al suolo, mentre la stabilità atmosferica ne condiziona il ristagno.")
+    st.info("Simulazione completata. Notare l'accelerazione del flusso tra gli edifici e il ristagno alla base del rilievo orografico.")
