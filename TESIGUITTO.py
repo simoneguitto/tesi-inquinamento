@@ -1,6 +1,7 @@
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
+import pandas as pd  # Fondamentale per l'export Excel
 
 # --- CONFIGURAZIONE PAGINA ---
 st.set_page_config(page_title="Tesi Guitto Simone - Simulatore ADR", layout="wide")
@@ -12,9 +13,9 @@ st.markdown("""
 **Corso di Laurea in Ingegneria Civile e Ambientale - Università Uninettuno**
 
 **Candidato:** Guitto Simone  
-**Oggetto:** Simulazione dinamica modello ADR (Advezione-Diffusione-Reazione) con volumetrie urbane differenziate.
+**Oggetto:** Simulazione dinamica modello ADR (Advezione-Diffusione-Reazione) con export dati per post-processing.
 """)
-st.markdown("---") # Linea separatrice elegante
+st.markdown("---")
 
 # --- SIDEBAR DI CONTROLLO ---
 with st.sidebar:
@@ -89,4 +90,30 @@ if st.sidebar.button("AVVIA SIMULAZIONE TECNICA"):
             mappa_box.plotly_chart(fig, use_container_width=True)
             testo_box.info(f"Monitoraggio in tempo reale: Picco rilevato {picco:.2f} PPM")
 
-    st.success("Analisi completata. Dati validati dal Candidato: Guitto Simone.")
+    st.success("Analisi completata. Dati pronti per l'esportazione.")
+
+    # --- CREAZIONE DEL FILE CSV PER EXCEL ---
+    # Creiamo una tabella con tutti i dati della mappa finale
+    dati_export = []
+    for i in range(N):
+        for j in range(N):
+            valore_ppm = C[i,j]
+            if valore_ppm > 0.1: # Salviamo solo i punti dove c'è gas per non appesantire il file
+                dati_export.append({
+                    "Coordinata X (m)": i,
+                    "Coordinata Y (m)": j,
+                    "Altezza Suolo (m)": orografia[i,j],
+                    "Altezza Edificio (m)": edifici_altezze[i,j],
+                    "Concentrazione (PPM)": round(valore_ppm, 4)
+                })
+    
+    # Convertiamo in formato scaricabile
+    df = pd.DataFrame(dati_export)
+    csv = df.to_csv(index=False).encode('utf-8')
+
+    st.download_button(
+        label="💾 SCARICA DATASET COMPLETO (CSV/EXCEL)",
+        data=csv,
+        file_name='dati_tesi_guitto_simone.csv',
+        mime='text/csv',
+    )
