@@ -3,14 +3,26 @@ import numpy as np
 import plotly.graph_objects as go
 
 # --- CONFIGURAZIONE PAGINA ---
-st.set_page_config(page_title="Simulatore ADR - Ingegneria Civile Ambientale", layout="wide")
+st.set_page_config(page_title="Tesi Guitto Simone - Simulatore ADR", layout="wide")
 
+# --- INTESTAZIONE ACCADEMICA ---
 st.title("Sistema Integrato di Simulazione Dispersione Atmosferica")
-st.markdown("### Analisi fluidodinamica e monitoraggio PPM - Corso di Ingegneria Civile e Ambientale")
-st.write("Modello deterministico basato su equazioni di Advezione-Diffusione-Reazione (ADR).")
+st.markdown("""
+### Analisi fluidodinamica e monitoraggio PPM
+**Corso di Laurea in Ingegneria Civile e Ambientale - Università Uninettuno**
+
+**Candidato:** Guitto Simone  
+**Oggetto:** Simulazione dinamica modello ADR (Advezione-Diffusione-Reazione) con volumetrie urbane differenziate.
+""")
+st.markdown("---") # Linea separatrice elegante
 
 # --- SIDEBAR DI CONTROLLO ---
 with st.sidebar:
+    st.header("🎓 Dati Tesi")
+    st.info("**Candidato:** Guitto Simone\n\n**Facoltà:** Ingegneria Civile e Ambientale")
+    
+    st.divider()
+    
     st.header("🏢 Parametri Urbanistici")
     num_palazzi = st.slider("Numero edifici", 0, 10, 6)
     dist_primo = st.slider("Distanza sorgente (m)", 8, 20, 12)
@@ -31,8 +43,10 @@ orografia = np.zeros((N, N))
 
 np.random.seed(42)
 if num_palazzi > 0:
+    # Palazzo principale (Alto)
     edifici_mask[dist_primo:dist_primo+4, 23:27] = 1
     edifici_altezze[dist_primo:dist_primo+4, 23:27] = 13.0
+    # Altri edifici
     for _ in range(num_palazzi - 1):
         px, py = np.random.randint(15, 45), np.random.randint(10, 40)
         h = np.random.choice([3.5, 7.0, 10.0, 15.0]) 
@@ -48,7 +62,7 @@ if st.sidebar.button("AVVIA SIMULAZIONE TECNICA"):
 
     for t in range(180):
         Cn = C.copy()
-        Cn[sx, sy] += 38 * dt # Target ~3.7 PPM
+        Cn[sx, sy] += 38 * dt # Calibrazione PPM (Target 3.7 - 4.0)
         
         for i in range(1, N-1):
             for j in range(1, N-1):
@@ -75,4 +89,4 @@ if st.sidebar.button("AVVIA SIMULAZIONE TECNICA"):
             mappa_box.plotly_chart(fig, use_container_width=True)
             testo_box.info(f"Monitoraggio in tempo reale: Picco rilevato {picco:.2f} PPM")
 
-    st.success("Analisi completata per l'Università Uninettuno - Facoltà di Ingegneria Civile e Ambientale.")
+    st.success("Analisi completata. Dati validati dal Candidato: Guitto Simone.")
